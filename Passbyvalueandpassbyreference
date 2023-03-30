@@ -1,0 +1,25 @@
+package main
+
+import "fmt"
+
+// pass by value
+func squareByValue(x int) {
+    x = x * x
+}
+
+// pass by reference
+func squareByReference(x *int) {
+    *x = *x * *x
+}
+
+func main() {
+    num := 15
+
+    // pass by value
+    squareByValue(num)
+    fmt.Println("Pass by value result:", num) // num is still 15
+
+    // pass by reference
+    squareByReference(&num)
+    fmt.Println("Pass by reference result:", num) // num is now 225
+}
