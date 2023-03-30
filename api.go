@@ -1,124 +1,159 @@
 package main
 
 import (
-	"encoding/csv"
-	"fmt"
-	"log"
-	"net/http"
-	"os"
-	"strconv"
-	"strings"
+    "encoding/csv"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net/http"
+    "strconv"
+    "strings"
 )
 
 type Record struct {
-	ID    int    `csv:"id"`
-	Name  string `csv:"name"`
-	Email string `csv:"email"`
+    ID      int    `json:"id"`
+    Name    string `json:"name"`
+    Age     int    `json:"age"`
+    Country string `json:"country"`
 }
 
 var records []Record
 
-func loadDataset() error {
-	// Open the dataset file
-	file, err := os.Open("dataset.csv")
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+func main() {
+    // load data from CSV file
+    records = loadCSV("dataset.csv")
 
-	// Parse the CSV data into records
-	reader := csv.NewReader(file)
-	reader.FieldsPerRecord = 3
-	reader.TrimLeadingSpace = true
-	lines, err := reader.ReadAll()
-	if err != nil {
-		return err
-	}
-	records = make([]Record, len(lines))
-	for i, line := range lines {
-		id, err := strconv.Atoi(line[0])
-		if err != nil {
-			return err
-		}
-		records[i] = Record{
-			ID:    id,
-			Name:  line[1],
-			Email: line[2],
-		}
-	}
+    // setup HTTP routes
+    http.HandleFunc("/records", getRecordsHandler)
+    http.HandleFunc("/records/filter", filterRecordsHandler)
+    http.HandleFunc("/records/create", createRecordHandler)
+    http.HandleFunc("/records/update", updateRecordHandler)
+    http.HandleFunc("/records/delete", deleteRecordHandler)
 
-	return nil
+    // start server
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func loadCSV(filename string) []Record {
+    file, err := os.Open(filename)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer file.Close()
+
+    reader := csv.NewReader(file)
+    reader.Comma = ','
+
+    lines, err := reader.ReadAll()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    var records []Record
+    for i, line := range lines {
+        if i == 0 {
+            continue // skip header row
+        }
+
+        id, _ := strconv.Atoi(line[0])
+        age, _ := strconv.Atoi(line[2])
+
+        records = append(records, Record{
+            ID:      id,
+            Name:    line[1],
+            Age:     age,
+            Country: line[3],
+        })
+    }
+
+    return records
 }
 
 func getRecordsHandler(w http.ResponseWriter, r *http.Request) {
-	// Write the records as CSV to the response
-	w.Header().Set("Content-Type", "text/csv")
-	w.Header().Set("Content-Disposition", "attachment; filename=dataset.csv")
-	writer := csv.NewWriter(w)
-	writer.Write([]string{"id", "name", "email"})
-	for _, record := range records {
-		writer.Write([]string{strconv.Itoa(record.ID), record.Name, record.Email})
-	}
-	writer.Flush()
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(records)
 }
 
-func getRecordsWithFilterHandler(w http.ResponseWriter, r *http.Request) {
-	// Parse the query params
-	q := r.URL.Query()
-	filter := q.Get("filter")
-	value := q.Get("value")
+func filterRecordsHandler(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
 
-	// Write the matching records as CSV to the response
-	w.Header().Set("Content-Type", "text/csv")
-	w.Header().Set("Content-Disposition", "attachment; filename=dataset.csv")
-	writer := csv.NewWriter(w)
-	writer.Write([]string{"id", "name", "email"})
-	for _, record := range records {
-		fieldValue := ""
-		switch filter {
-		case "id":
-			fieldValue = strconv.Itoa(record.ID)
-		case "name":
-			fieldValue = record.Name
-		case "email":
-			fieldValue = record.Email
-		default:
-			http.Error(w, fmt.Sprintf("Invalid filter: %s", filter), http.StatusBadRequest)
-			return
-		}
-		if strings.Contains(strings.ToLower(fieldValue), strings.ToLower(value)) {
-			writer.Write([]string{strconv.Itoa(record.ID), record.Name, record.Email})
-		}
-	}
-	writer.Flush()
+    q := r.URL.Query()
+    var filtered []Record
+    for _, record := range records {
+        if q.Get("id") != "" && strconv.Itoa(record.ID) != q.Get("id") {
+            continue
+        }
+        if q.Get("name") != "" && !strings.Contains(strings.ToLower(record.Name), strings.ToLower(q.Get("name"))) {
+            continue
+        }
+        if q.Get("age") != "" {
+            age, err := strconv.Atoi(q.Get("age"))
+            if err != nil || record.Age != age {
+                continue
+            }
+        }
+        if q.Get("country") != "" && !strings.Contains(strings.ToLower(record.Country), strings.ToLower(q.Get("country"))) {
+            continue
+        }
+
+        filtered = append(filtered, record)
+    }
+
+    json.NewEncoder(w).Encode(filtered)
 }
 
 func createRecordHandler(w http.ResponseWriter, r *http.Request) {
-	// Parse the request body
-	reader := csv.NewReader(r.Body)
-	reader.FieldsPerRecord = 3
-	reader.TrimLeadingSpace = true
-	lines, err := reader.ReadAll()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if len(lines) != 1 {
-		http.Error(w, "Invalid number of records in request", http.StatusBadRequest)
-		return
-	}
-	line := lines[0]
+    w.Header().Set("Content-Type", "application/json")
 
-	// Create a new record
-	id, err := strconv.Atoi(line[0])
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	record := Record{
-		ID:    id,
-		Name:  line[1],
-		Email:
+    var record Record
+    err := json.NewDecoder(r.Body).Decode(&record)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    // generate new ID
+    maxID := 0
+    for _, r := range records {
+        if r.ID > maxID {
+            maxID = r.ID
+        }
+    }
+    record.ID = maxID + 1
+
+    records = append(records, record)
+
+    json.NewEncoder(w).Encode(record)
+}
+
+func updateRecordHandler(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("
+func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+
+    id := r.URL.Query().Get("id")
+    if id == "" {
+        http.Error(w, "ID parameter is required", http.StatusBadRequest)
+        return
+    }
+
+    var deleted Record
+    for i, record := range records {
+        if strconv.Itoa(record.ID) == id {
+            deleted = record
+            // remove the record from the slice
+            records = append(records[:i], records[i+1:]...)
+            break
+        }
+    }
+
+    if (Record{}) == deleted {
+        http.Error(w, fmt.Sprintf("Record with ID %s not found", id), http.StatusNotFound)
+        return
+    }
+
+    json.NewEncoder(w).Encode(deleted)
+}
 
 
    
